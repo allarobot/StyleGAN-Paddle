@@ -20,10 +20,9 @@ Picture: These people are not real – they were produced by our generator that 
 There is no styleGAN paddle implementation to many better knowledge. I notice there are great advance in GAN domain and it could be a powerful tool for Auto defect recognition(ADR). I joined a team working on inspection image sponsored by Baidu AI, and hope to come up with a general solution.
 
 ## System Requirements
-- Ubuntu18.04
-- Paddle1.8.3
-- Numpy 1.13.3
-- scikit-image 0.15.0
+- Windows 10
+- Paddle1.8.3-GPU
+- opencv-python
 - tqdm
 - GTX 1080Ti or above
 
