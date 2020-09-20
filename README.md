@@ -1,7 +1,7 @@
 # A Paddle Implementation of StyleGAN (Unofficial)
 
-![Github](https://img.shields.io/badge/Paddle-v1.8.3-green.svg?style=for-the-badge&logo=data:image/png)
-![Github](https://img.shields.io/badge/python-3.7-green.svg?style=for-the-badge&logo=python)
+![Github](https://img.shields.io/badge/Paddle-v1.8.3-green.svg?style=for-the-badge&logo=data:logo/paddle2.png)
+![Github](https://img.shields.io/badge/python-3.7-green.svg?style=for-the-badge&logo=appveyor&logo=python)
 ![Github](https://img.shields.io/badge/status-AlmostFinished-blue.svg?style=for-the-badge&logo=fire)
 ![Github](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge&logo=fire)
 
