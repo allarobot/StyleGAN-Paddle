@@ -65,30 +65,6 @@ def print_model(x,m):
             # 池化层没有参数
             print(item.full_name(), x.shape)
 
-# def save_model(states:dict, path:str):
-#     fp = open(path,'w')
-#     file_paths = []
-#     for model_name in states:
-#         state_dict = states[model_name]
-#         path,ext = os.path.splitext(path)
-#         if ext:
-#             file_path = path+"-"+model_name+"."+ext
-#         else:
-#             file_path = path+"-"+model_name
-#         file_paths.append(file_path)
-#         fluid.dygraph.save_dygraph(state_dict,file_path)
-#     fp.writelines(file_paths)
-#     fp.close()
-    
-# def load_model(path:str):
-#     fp = open(path,'r')
-#     file_paths = fp.readlines()
-#     states={}
-#     for path in file_paths:
-#         model_name = os.path.splitext(path)[0].split('-')[-1]
-#         states[model_name] = fluid.dygraph.load_model(path)
-
-#     return states
 import pickle
 def save_checkpoint(states:dict, path:str):
     dump_states = {}

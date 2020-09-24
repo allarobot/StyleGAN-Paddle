@@ -17,7 +17,7 @@ This repository contains a Paddle implementation of the following paper:
 Picture: These people are not real – they were produced by our generator that allows control over different aspects of the image.
 
 ## Motivation
-There is no styleGAN paddle implementation to many better knowledge. I notice there are great advance in GAN domain and it could be a powerful tool for Auto defect recognition(ADR). I joined a team working on inspection image sponsored by Baidu AI, and hope to come up with a general solution.
+There is no styleGAN paddle implementation to my best knowledge. I notice there are great advancements in GAN domain and it could be a powerful tool for Auto defect recognition(ADR). I joined a team working on inspection image sponsored by Baidu AI, and hope to come up with a general solution.
 
 ## System Requirements
 - Windows 10

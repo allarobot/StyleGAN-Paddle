@@ -30,6 +30,7 @@ class TrainOptions():
     def __init__(self):
         parser = argparse.ArgumentParser()
         parser.add_argument('--path', type=str, default='./ffhq/')
+        #parser.add_argument('--path', type=str, default='ffhq1024/')
         parser.add_argument('--epoch', type=int, default=500)
         parser.add_argument('--batch_size', type=int, default=1)
         parser.add_argument('--type', type=str, default='style')

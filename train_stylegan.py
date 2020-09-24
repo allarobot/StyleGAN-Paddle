@@ -25,7 +25,7 @@ from paddle.fluid.layers import exponential_decay
 from ops import SoftPlus
 
 # Set random seem for reproducibility
-manualSeed = 999
+manualSeed = 100
 #manualSeed = random.randint(1, 10000) # use if you want new results
 print("Random Seed: ", manualSeed)
 random.seed(manualSeed)
@@ -49,7 +49,7 @@ def main(opts):
     #     batch_size=opts.batch_size,
     #     shuffle=True,
     # )
-    loader = data_loader()
+    loader = data_loader(opts.path)
 
     device = fluid.CUDAPlace(0) if opts.device=='GPU' else fluid.CPUPlace(0)
     with fluid.dygraph.guard(device):
@@ -81,7 +81,7 @@ def main(opts):
         optim_G = optim.Adam(parameter_list=G.parameters(), learning_rate=scheduler_G)
 
         # Train
-        fix_z = np.random.randn(opts.batch_size, 512)#.to(opts.device)
+        fix_z = np.random.randn(opts.batch_size, 512)
         fix_z = dygraph.to_variable(fix_z)
         softplus = SoftPlus()
         Loss_D_list = [0.0]
@@ -98,26 +98,24 @@ def main(opts):
                 # =======================================================================================================
                 # Compute adversarial loss toward discriminator
                 real_img = np.array([item for item in data ],dtype='float32').reshape((-1,3,1024,1024))
-            #x,y = data[0] ## data的形状为[(x,y),...]
-
+                
                 D.clear_gradients()
                 real_img = dygraph.to_variable(real_img)
                 real_logit = D(real_img)
+
                 z =np.float32(np.random.randn(real_img.shape[0],512))
                 fake_img = G(dygraph.to_variable(z))
-                #fake_logit = D(fake_img.detach())
                 fake_logit = D(fake_img)
+
                 d_loss = layers.mean(softplus(fake_logit))
                 d_loss = d_loss + layers.mean(softplus(-real_logit))
 
                 if opts.r1_gamma != 0.0:
-                    r1_penalty = R1Penalty(real_img.detach(), D)
-                    #r1_penalty = R1Penalty(real_img, D)
+                    r1_penalty = R1Penalty(real_img, D)
                     d_loss = d_loss + r1_penalty * (opts.r1_gamma * 0.5)
 
                 if opts.r2_gamma != 0.0:
-                    r2_penalty = R2Penalty(fake_img.detach(), D)
-                    #r2_penalty = R2Penalty(fake_img, D)
+                    r2_penalty = R2Penalty(fake_img, D)
                     d_loss = d_loss + r2_penalty * (opts.r2_gamma * 0.5)
 
                 loss_D_list.append(d_loss.numpy())

@@ -99,8 +99,9 @@ class Dataset:
 
 
 # ## batch/shuffle dataset with Reader
-def data_loader():
-    test_list_temp = glob("star/*.png")
+def data_loader(path):
+    search_pattern = os.path.join(path,"*.png")
+    test_list_temp = glob(search_pattern) 
     test_list = []
     for path in test_list_temp:
         test_list.append(path)

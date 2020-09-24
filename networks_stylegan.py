@@ -17,10 +17,6 @@ import numpy as np
 import os
 from collections import OrderedDict
 
-# import torch.nn.functional as F
-# import torch.nn as nn
-# from torch.nn.init import kaiming_normal_
-# import torch
 import paddle.fluid.layers as layers
 import paddle.fluid.dygraph as dygraph
 import paddle
@@ -31,7 +27,10 @@ import ops
 class ApplyNoise(dygraph.Layer):
     def __init__(self, channels):
         super().__init__()
-        self.weight = layers.create_parameter(shape=(channels,),dtype='float32',is_bias=True)  # zeros???,需要对照TF
+        self.weight = layers.create_parameter(shape=(channels,),
+                                            dtype='float32',
+                                            is_bias=True,
+                                            default_initializer=fluid.initializer.ConstantInitializer(value=1.0))  # zeros???,需要对照TF
 
     def forward(self, x, noise):
         if noise is None:
@@ -53,10 +52,10 @@ class ApplyStyle(dygraph.Layer):
                       use_wscale=use_wscale)
 
     def forward(self, x, latent):
-        style = self.linear(latent)  # style => [batch_size, n_channels*2]
+        style = self.linear(latent)  #[batch_size,latent_size(512)] x ==> style: [batch_size, n_channels*2]
         shape = [-1, 2, x.shape[1], 1, 1]
-        style = layers.reshape(style, shape)   # [batch_size, 2, n_channels, ...]
-        x = x * (style[:, 0] + 1.) + style[:, 1]
+        style = layers.reshape(style, shape)   # [batch_size, 2, n_channels ,1 ,1] 
+        x = x * (style[:, 0] + 1.) + style[:, 1] # x+x*style[0]+style[1]
         return x
 
 
@@ -105,12 +104,6 @@ class FC(dygraph.Layer):
         x = layers.leaky_relu(x, alpha=0.2)
         return x
 
-# def linear(input, weight, bias=None):
-#     layer_obj=fluid.dygraph.Linear(input.shape[1],weight.shape[1])
-#     fluid.layers.assign(weight,layer_obj.weight)
-#     if bias is not None:
-#         fluid.layers.assign(bias, layer_obj.bias)
-#     return layer_obj(input)
 
 class Blur2d(dygraph.Layer):
     def __init__(self, f=[1,2,1], normalize=True, flip=False, stride=1):
@@ -123,8 +116,12 @@ class Blur2d(dygraph.Layer):
 
         if f is not None:
             f = layers.tensor(f, dtype='float32')
+            print("f[:, None]: ",f[:, None])
+            print("f[None, :]: ",f[None, :])
             f = f[:, None] * f[None, :]
+            print("f=f[:, None] * f[None, :]: ",f)
             f = f[None, None]
+            print("then f[None, None]: ",f)
             if normalize:
                 f = f / f.sum()
             if flip:
@@ -143,8 +140,8 @@ class Blur2d(dygraph.Layer):
                 x,
                 kernel,
                 stride=self.stride,
-                padding=int((self.f.size(2)-1)/2),
-                groups=x.size(1)
+                padding=int((self.f.shape[2]-1)/2),
+                groups=x.shape[1]
             )
             return x
         else:
@@ -247,6 +244,9 @@ class LayerEpilogue(dygraph.Layer):
                  use_pixel_norm,
                  use_instance_norm,
                  use_styles):
+        '''
+        noise and style AdaIN operation
+        '''
         super(LayerEpilogue, self).__init__()
         #print("channels: ", channels)
         if use_noise:
@@ -303,8 +303,8 @@ class GBlock(dygraph.Layer):
         # res
         self.res = res
 
-        # blur2d
-        self.blur = Blur2d(f)
+        # # blur2d
+        # self.blur = Blur2d(f)
 
         # noise
         self.noise_input = noise_input
@@ -317,39 +317,48 @@ class GBlock(dygraph.Layer):
             self.up_sample = dygraph.Conv2DTranspose(self.nf(res-3), self.nf(res-2), 4, stride=2, padding=1)
 
         # A Composition of LayerEpilogue and Conv2d.
+        self.conv1  = Conv2d(input_channels=self.nf(res-2), output_channels=self.nf(res-2),
+                              kernel_size=3, use_wscale=use_wscale)
         self.adaIn1 = LayerEpilogue(self.nf(res-2), dlatent_size, use_wscale, use_noise,
                                     use_pixel_norm, use_instance_norm, use_style)
-        # self.conv1  = Conv2d(input_channels=self.nf(res-2), output_channels=self.nf(res-2),
-        #                      kernel_size=3, use_wscale=use_wscale)
-        self.conv1 = dygraph.Conv2D(self.nf(res-2),self.nf(res-2),3,padding=1)
+        self.conv2  = Conv2d(input_channels=self.nf(res-2), output_channels=self.nf(res-2),
+                              kernel_size=3, use_wscale=use_wscale)
         self.adaIn2 = LayerEpilogue(self.nf(res-2), dlatent_size, use_wscale, use_noise,
                                     use_pixel_norm, use_instance_norm, use_style)
 
     def forward(self, x, dlatent):
         x = self.up_sample(x)
-        x = self.adaIn1(x, self.noise_input[self.res*2-4], dlatent[:, self.res*2-4])
         x = self.conv1(x)
+        x = self.adaIn1(x, self.noise_input[self.res*2-4], dlatent[:, self.res*2-4])
+        x = self.conv2(x)
         x = self.adaIn2(x, self.noise_input[self.res*2-3], dlatent[:, self.res*2-3])
         return x
 
-#model.apply(weights_init)
 
-
-# =========================================================================
-#   Define sub-network
-#   2019.3.31
-#   FC
-# =========================================================================
 class G_mapping(dygraph.Layer):
     def __init__(self,
-                 mapping_fmaps=512,
-                 dlatent_size=512,
-                 resolution=1024,
+                 mapping_fmaps=512,       # Z space dimensionality
+                 dlatent_size=512,        # W space dimensionality
+                 resolution=1024,         # image resolution
                  normalize_latents=True,  # Normalize latent vectors (Z) before feeding them to the mapping layers?
                  use_wscale=True,         # Enable equalized learning rate?
                  lrmul=0.01,              # Learning rate multiplier for the mapping layers.
                  gain=2**(0.5)            # original gain in tensorflow.
                  ):
+        '''
+        The mapping of generator, it will product w for style y afterwards.
+        parameters: 
+        - mapping_fmaps: default 512, Z space dimensionality
+        - dlatent_size: default 512, W space dimensionality
+        - resolution: default 1024 image resolution
+        - normalize_latents: default True,  Normalize latent vectors (Z) before feeding them to the mapping layers?
+        - use_wscale: default True,Enable equalized learning rate?
+        - lrmul: default 0.01, Learning rate multiplier for the mapping layers.
+        - gain: default 2**(0.5), original gain in tensorflow.
+        returns:
+        a tensor with size dlatent_size 
+        '''
+
         super(G_mapping, self).__init__()
         self.mapping_fmaps = mapping_fmaps
         self.func = dygraph.Sequential(*[
@@ -365,11 +374,15 @@ class G_mapping(dygraph.Layer):
         )
 
         self.normalize_latents = normalize_latents
-        self.resolution_log2 = int(np.log2(resolution))
-        self.num_layers = self.resolution_log2 * 2 - 2
-        self.pixel_norm = PixelNorm()
+
+        # 4^2~1024^2 --> 2~18layers
         # - 2 means we start from feature map with height and width equals 4.
-        # as this example, we get num_layers = 18.
+        # as this example, 1024*1024 pixel image we get num_layers = 18.
+        self.resolution_log2 = int(np.log2(resolution))
+        self.num_layers = self.resolution_log2 * 2 - 2 
+
+        self.pixel_norm = PixelNorm()
+
 
     def forward(self, x):
         if self.normalize_latents:
@@ -387,35 +400,38 @@ class G_synthesis(dygraph.Layer):
                  structure='fixed',                  # 'fixed' = no progressive growing, 'linear' = human-readable, 'recursive' = efficient, 'auto' = select automatically.
                  fmap_max=512,                       # Maximum number of feature maps in any layer.
                  fmap_decay=1.0,                     # log2 feature map reduction when doubling the resolution.
-                 f=None,                        # (Huge overload, if you dont have enough resouces, please pass it as `f = None`)Low-pass filter to apply when resampling activations. None = no filtering.
+                 f=None,                             # (Huge overload, if you dont have enough resouces, please pass it as `f = None`)Low-pass filter to apply when resampling activations. None = no filtering.
                  use_pixel_norm      = False,        # Enable pixelwise feature vector normalization?
-                 use_instance_norm   = True,        # Enable instance normalization?
+                 use_instance_norm   = True,         # Enable instance normalization?
                  use_wscale = True,                  # Enable equalized learning rate?
                  use_noise = True,                   # Enable noise inputs?
                  use_style = True                    # Enable style inputs?
                  ):                             # batch size.
         """
-            2019.3.31
-        :param dlatent_size: 512 Disentangled latent(W) dimensionality.
-        :param resolution: 1024 x 1024.
-        :param fmap_base:
-        :param num_channels:
-        :param structure: only support 'fixed' mode.
-        :param fmap_max:
+        synthesis of generator, the second part of gnerator
+        parameters:
+        dlatent_size: 512 Disentangled latent(W) dimensionality.
+        resolution: 1024 x 1024.
+        fmap_base:
+        num_channels:
+        structure: only support 'fixed' mode.
+        fmap_max:
         """
         super(G_synthesis, self).__init__()
 
         self.nf = lambda stage: min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
         self.structure = structure
-        self.resolution_log2 = int(np.log2(resolution))
+
         # - 2 means we start from feature map with height and width equals 4.
         # as this example, we get num_layers = 18.
+        self.resolution_log2 = int(np.log2(resolution))
         num_layers = self.resolution_log2 * 2 - 2
+
         self.num_layers = num_layers
 
         # Noise inputs.
         self.noise_inputs = []
-        for layer_idx in range(num_layers):
+        for layer_idx in range(num_layers): #2~18
             res = layer_idx // 2 + 2
             shape = [1, 1, 2 ** res, 2 ** res]
             self.noise_inputs.append(layers.randn(shape))
@@ -424,19 +440,17 @@ class G_synthesis(dygraph.Layer):
         self.blur = Blur2d(f)
 
         # torgb: fixed mode
-        self.channel_shrinkage = Conv2d(input_channels=self.nf(self.resolution_log2-2),
-                                        output_channels=self.nf(self.resolution_log2),
-                                        kernel_size=3,
-                                        use_wscale=use_wscale)
-        #self.torgb = Conv2d(self.nf(self.resolution_log2), num_channels, kernel_size=1, gain=1, use_wscale=use_wscale)
-        self.torgb = dygraph.Conv2D(self.nf(self.resolution_log2), num_channels, 1)
+        # channel 16 -> channel 8
+        self.channel_shrinkage = Conv2d(self.nf(self.resolution_log2-2), self.nf(self.resolution_log2),3,use_wscale=use_wscale) 
+        # channel 8 -> channel 3
+        self.torgb = Conv2d(self.nf(self.resolution_log2), num_channels, 1, gain=1, use_wscale=use_wscale) 
 
         # Initial Input Block
         self.const_input = layers.create_parameter((1, self.nf(1), 4, 4),'float32',default_initializer=fluid.initializer.ConstantInitializer(value=1.0))
         self.bias = layers.create_parameter((self.nf(1),),'float32',default_initializer=fluid.initializer.ConstantInitializer(value=1.0))
         self.adaIn1 = LayerEpilogue(self.nf(1), dlatent_size, use_wscale, use_noise,
                                     use_pixel_norm, use_instance_norm, use_style)
-        self.conv1  = dygraph.Conv2D(self.nf(1), self.nf(1),3,padding=1)
+        self.conv1  = Conv2d(self.nf(1), self.nf(1),3, gain=1, use_wscale=use_wscale)
         self.adaIn2 = LayerEpilogue(self.nf(1), dlatent_size, use_wscale, use_noise, use_pixel_norm,
                                     use_instance_norm, use_style)
 
@@ -539,7 +553,7 @@ class StyleGenerator(dygraph.Layer):
                  mapping_fmaps=512,
                  style_mixing_prob=0.9,       # Probability of mixing styles during training. None = disable.
                  truncation_psi=0.7,          # Style strength multiplier for the truncation trick. None = disable.
-                 truncation_cutoff=8,          # Number of layers for which to apply the truncation trick. None = disable.
+                 truncation_cutoff=8,         # Number of layers for which to apply the truncation trick. None = disable.
                  **kwargs
                  ):
         super(StyleGenerator, self).__init__()
@@ -554,43 +568,22 @@ class StyleGenerator(dygraph.Layer):
     def forward(self, latents1):
         dlatents1, num_layers = self.mapping(latents1)
         # let [N, O] -> [N, num_layers, O]
-        # 这里的unsqueeze不能使用inplace操作, 如果这样的话, 反向传播的链条会断掉的.
         dlatents1 = layers.unsqueeze(dlatents1,1)
         #print("dlatents1 shape:",dlatents1.shape,dlatents1.dtype,(-1, int(num_layers), -1))
         dlatents1 = layers.expand(dlatents1,(1, int(num_layers), 1))
 
-        # Add mixing style mechanism.
-        # with torch.no_grad():
-        #     latents2 = torch.randn(latents1.shape).to(latents1.device)
-        #     dlatents2, num_layers = self.mapping(latents2)
-        #     dlatents2 = dlatents2.unsqueeze(1)
-        #     dlatents2 = dlatents2.expand(-1, int(num_layers), -1)
-        #
-        #     # TODO: original NvLABs produce a placeholder "lod", this mechanism was not added here.
-        #     cur_layers = num_layers
-        #     mix_layers = num_layers
-        #     if np.random.random() < self.style_mixing_prob:
-        #         mix_layers = np.random.randint(1, cur_layers)
-        #
-        #     # NvLABs: dlatents = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(dlatents)), dlatents, dlatents2)
-        #     for i in range(num_layers):
-        #         if i >= mix_layers:
-        #             dlatents1[:, i, :] = dlatents2[:, i, :]
-
         # Apply truncation trick.
+        # coefs = [0.8]*truncation_cutoff+ [1]*(num_layers-truncation_cutoff)
         if self.truncation_psi and self.truncation_cutoff:
             coefs = np.ones([1, num_layers, 1], dtype=np.float32)
             for i in range(num_layers):
                 if i < self.truncation_cutoff:
                     coefs[:, i, :] *= self.truncation_psi
-            """Linear interpolation.
-               a + (b - a) * t (a = 0)
-               reduce to
-               b * t
-            """
-            #print("shapes: ",dlatents1.shape,coefs.shape)  #shapes:  [1, 18, 512] (1, 18, 1)
+            
+            # print("shapes: ",dlatents1.shape,coefs.shape)  #shapes:  [1, 18, 512] (1, 18, 1)
             dlatents1 = dlatents1*dygraph.to_variable(coefs)
 
+        # 18 row -> 18 layers
         img = self.synthesis(dlatents1)
         return img
 
@@ -603,11 +596,10 @@ class StyleDiscriminator(dygraph.Layer):
                  structure='fixed',  # 'fixed' = no progressive growing, 'linear' = human-readable, 'recursive' = efficient, only support 'fixed' mode now.
                  fmap_max=512,
                  fmap_decay=1.0,
-                 # f=[1, 2, 1]         # (Huge overload, if you dont have enough resouces, please pass it as `f = None`)Low-pass filter to apply when resampling activations. None = no filtering.
+                 # f=[1, 2, 1]       # (Huge overload, if you dont have enough resouces, please pass it as `f = None`)Low-pass filter to apply when resampling activations. None = no filtering.
                  f=None         # (Huge overload, if you dont have enough resouces, please pass it as `f = None`)Low-pass filter to apply when resampling activations. None = no filtering.
                  ):
         """
-            Noitce: we only support input pic with height == width.
 
             if H or W >= 128, we use avgpooling2d to do feature map shrinkage.
             else: we use ordinary conv2d.
@@ -631,17 +623,17 @@ class StyleDiscriminator(dygraph.Layer):
         self.down24 = dygraph.Conv2D(self.nf(self.resolution_log2-8), self.nf(self.resolution_log2-8), 2, stride=2)
 
         # conv1: padding=same
-        self.conv1 = dygraph.Conv2D(self.nf(self.resolution_log2-1), self.nf(self.resolution_log2-1), 3, padding=(1, 1))
-        self.conv2 = dygraph.Conv2D(self.nf(self.resolution_log2-1), self.nf(self.resolution_log2-2), 3, padding=(1, 1))
-        self.conv3 = dygraph.Conv2D(self.nf(self.resolution_log2-2), self.nf(self.resolution_log2-3), 3, padding=(1, 1))
-        self.conv4 = dygraph.Conv2D(self.nf(self.resolution_log2-3), self.nf(self.resolution_log2-4), 3, padding=(1, 1))
-        self.conv5 = dygraph.Conv2D(self.nf(self.resolution_log2-4), self.nf(self.resolution_log2-5), 3, padding=(1, 1))
-        self.conv6 = dygraph.Conv2D(self.nf(self.resolution_log2-5), self.nf(self.resolution_log2-6), 3, padding=(1, 1))
-        self.conv7 = dygraph.Conv2D(self.nf(self.resolution_log2-6), self.nf(self.resolution_log2-7), 3, padding=(1, 1))
-        self.conv8 = dygraph.Conv2D(self.nf(self.resolution_log2-7), self.nf(self.resolution_log2-8), 3, padding=(1, 1))
+        self.conv1 = Conv2d(self.nf(self.resolution_log2-1), self.nf(self.resolution_log2-1), 3)
+        self.conv2 = Conv2d(self.nf(self.resolution_log2-1), self.nf(self.resolution_log2-2), 3)
+        self.conv3 = Conv2d(self.nf(self.resolution_log2-2), self.nf(self.resolution_log2-3), 3)
+        self.conv4 = Conv2d(self.nf(self.resolution_log2-3), self.nf(self.resolution_log2-4), 3)
+        self.conv5 = Conv2d(self.nf(self.resolution_log2-4), self.nf(self.resolution_log2-5), 3)
+        self.conv6 = Conv2d(self.nf(self.resolution_log2-5), self.nf(self.resolution_log2-6), 3)
+        self.conv7 = Conv2d(self.nf(self.resolution_log2-6), self.nf(self.resolution_log2-7), 3)
+        self.conv8 = Conv2d(self.nf(self.resolution_log2-7), self.nf(self.resolution_log2-8), 3)
 
         # calculate point:
-        self.conv_last = dygraph.Conv2D(self.nf(self.resolution_log2-8), self.nf(1), 3, padding=(1, 1))
+        self.conv_last = Conv2d(self.nf(self.resolution_log2-8), self.nf(1), 3)
         self.dense0 = dygraph.Linear(fmap_base, self.nf(0))
         self.dense1 = dygraph.Linear(self.nf(0), 1)
         #self.sigmoid = dygraph.Sigmoid()

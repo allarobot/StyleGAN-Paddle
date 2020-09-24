@@ -34,10 +34,11 @@ def R1Penalty(real_img, f):
     undo_loss_scaling = lambda x: x * layers.exp(-x * np.log(2.0,dtype='float32'))
 
     real_logit = apply_loss_scaling(layers.sum(real_logit))
-    grads = dygraph.grad(real_logit, reals, create_graph=True)
+    #grads = dygraph.grad(real_logit, reals, create_graph=True)
+    grads = dygraph.grad(real_logit, reals, create_graph=False)
     real_grads = layers.reshape(grads[0],(reals.shape[0], -1))
     real_grads = undo_loss_scaling(real_grads)
-    r1_penalty = layers.sum(layers.elementwise_mul(real_grads, real_grads))
+    r1_penalty = layers.reduce_sum(layers.elementwise_mul(real_grads, real_grads))
     return r1_penalty
 
 
@@ -45,16 +46,15 @@ def R2Penalty(fake_img, f):
     # gradient penalty
     fakes = fake_img
     fakes.stop_gradient = False
-    #fakes = fake_img
     fake_logit = f(fake)
-    #apply_loss_scaling = lambda x: x * layers.exp(x * torch.Tensor([np.float32(np.log(2.0))]))
-    #undo_loss_scaling = lambda x: x * layers.exp(-x * torch.Tensor([np.float32(np.log(2.0))]))
+
     apply_loss_scaling = lambda x: x * layers.exp(x * np.log(2.0))
     undo_loss_scaling = lambda x: x * layers.exp(-x * np.log(2.0))
 
     fake_logit = apply_loss_scaling(layers.sum(fake_logit))
-    grads = dygraph.grad(fake_logit, fakes,create_graph=True)
+    #grads = dygraph.grad(fake_logit, fakes,create_graph=True)
+    grads = dygraph.grad(fake_logit, fakes,create_graph=False)
     fake_grads = layers.reshape(grads[0],(fakes.shape[0], -1))
     fake_grads = undo_loss_scaling(fake_grads)
-    r2_penalty = layers.sum(layers.elementwise_mul(fake_grads, fake_grads))
+    r2_penalty = layers.reduce_sum(layers.elementwise_mul(fake_grads, fake_grads))
     return r2_penalty
